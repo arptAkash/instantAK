@@ -76,6 +76,7 @@ module.exports = async (request, response) => {
         try {
           const meta = await fetchMeta(url);
           const rendered = renderMessage(url, meta);
+          console.log("Rendered message:\n", rendered);
 
           await bot.editMessageText(rendered, {
             chat_id: chatId,
