@@ -33,31 +33,7 @@
 		</form>
 		<p>
 			Telegram:
-			<a href="https://t.me/ReadabBot" target="_blank"> @ReadabBot </a>
-			<span class="seperator">|</span>
-			<a href="https://github.com/gowee/readability-bot" target="_blank">
-				Source
-			</a>
-		</p>
-		<p>
-			<small>
-				The 
-				<a
-					href="https://github.com/gowee/readability-bot"
-					target="_blank"
-				>
-				service
-				</a>
-				is powered by
-				<a
-					href="https://github.com/mozilla/readability"
-					target="_blank"
-				>
-				Readability.js
-				</a>
-				and hosted on
-				<a href="https://vercel.com/" target="_blank">Vercel</a>.
-			</small>
+			<a href="https://t.me/userInstantBot" target="_blank"> @userInstantBot </a>
 		</p>
 	</div>
 </main>
