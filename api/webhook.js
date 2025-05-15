@@ -2,27 +2,30 @@ const crypto = require("crypto");
 const fetch = require("node-fetch");
 const TelegramBot = require("node-telegram-bot-api");
 
-const { READABILITY_API_URL, BOT_TOKEN, constructIvUrl, constructReadableUrl } = require("./_common.js");
-
-// process.env.NTBA_FIX_319 = "test"; // https://github.com/yagop/node-telegram-bot-api/issues/540
+const {
+  READABILITY_API_URL,
+  BOT_TOKEN,
+  constructIvUrl,
+  constructReadableUrl,
+} = require("./_common.js");
 
 const START_MESSAGE = `Just send an article link here.
 It will be converted to a readable webpage with Instant View.`;
 
 const bot = new TelegramBot(BOT_TOKEN);
-console.log(BOT_TOKEN);
 
 module.exports = async (request, response) => {
   try {
     const inlineQuery = request.body.inline_query;
     const message = request.body.message;
+
     if (inlineQuery && inlineQuery.query.trim()) {
       const url = tryFixUrl(inlineQuery.query);
-      if (!url) {
-        return;
-      }
+      if (!url) return;
+
       const meta = await fetchMeta(url);
-      const message = renderMessage(url, meta);
+      const text = renderMessage(url, meta);
+
       try {
         await bot.answerInlineQuery(
           inlineQuery.id,
@@ -33,7 +36,7 @@ module.exports = async (request, response) => {
               title: meta.title ?? "<UNTITLED>",
               description: meta.excerpt,
               input_message_content: {
-                message_text: message,
+                message_text: text,
                 disable_web_page_preview: false,
                 parse_mode: "HTML",
               },
@@ -41,13 +44,15 @@ module.exports = async (request, response) => {
           ],
           { is_personal: false, cache_time: 900 }
         );
-      } catch (_e) {
-        // a possible case is expired query
-        console.error(_e);
+      } catch (e) {
+        console.error("InlineQuery Error:", e);
       }
     } else if (message && message.text.trim()) {
-      if (message.text.trim() === "/start") {
-        await bot.sendMessage(message.chat.id, START_MESSAGE, {
+      const text = message.text.trim();
+      const chatId = message.chat.id;
+
+      if (text === "/start") {
+        await bot.sendMessage(chatId, START_MESSAGE, {
           reply_markup: {
             inline_keyboard: [
               [{ text: "Try Inline Mode", switch_inline_query: "" }],
@@ -55,56 +60,60 @@ module.exports = async (request, response) => {
           },
         });
       } else {
-        const url = tryFixUrl(message.text);
-        if (url) {
-          let rendered;
-          try {
-            const meta = await fetchMeta(url);
-            rendered = renderMessage(url, meta);
-          } catch (e) {
-            if (message.chat.type === "private") {
-              await bot.sendMessage(
-                message.chat.id,
-                `Failed to fetch the URL with error:\n <pre>${e
-                  .toString()
-                  .replace("<", "&lt;")
-                  .replace(">", "&gt;")
-                  .replace("&", "&amp;")
-                  .replace('"', "&quot;")}</pre>`,
-                { parse_mode: "HTML" }
-              );
-            }
-            return;
-          }
-          await bot.sendMessage(message.chat.id, rendered, {
-            disable_web_page_preview: false,
-            parse_mode: "HTML",
-          });
-        } else {
+        const url = tryFixUrl(text);
+        if (!url) {
           if (message.chat.type === "private") {
-            await bot.sendMessage(message.chat.id, "It is not a valid URL.");
+            await bot.sendMessage(chatId, "It is not a valid URL.");
           }
+          return;
+        }
+
+        // Acknowledge early
+        const sent = await bot.sendMessage(chatId, "Processing...", {
+          parse_mode: "HTML",
+        });
+
+        try {
+          const meta = await fetchMeta(url);
+          const rendered = renderMessage(url, meta);
+
+          await bot.editMessageText(rendered, {
+            chat_id: chatId,
+            message_id: sent.message_id,
+            parse_mode: "HTML",
+            disable_web_page_preview: false,
+          });
+        } catch (e) {
+          const errorText = escapeHtml(e.toString());
+          await bot.editMessageText(
+            `Failed to fetch the URL with error:\n<pre>${errorText}</pre>`,
+            {
+              chat_id: chatId,
+              message_id: sent.message_id,
+              parse_mode: "HTML",
+            }
+          );
         }
       }
     }
+
     response.status(204).send("");
-    response = null;
   } catch (e) {
-    // mark as success to avoid TG retrying
+    console.error("Main Handler Error:", e);
     response.status(200).send(e.toString());
-    console.error(e);
-    response = null;
-  } finally {
-    response && response.status(200).send("early return");
   }
 };
+
+// ========== Utilities ==========
 
 function renderMessage(url, meta) {
   const readableUrl = constructReadableUrl(url);
   const ivUrl = constructIvUrl(url);
-  return `<a href="${ivUrl}"> </a><a href="${readableUrl}">${meta.title ?? "Untitlted Article"
-    }</a>\n ${meta.byline ?? meta.siteName ?? new URL(url).hostname
-    } (<a href="${url}">source</a>)`;
+  return `<a href="${ivUrl}"> </a><a href="${readableUrl}">${escapeHtml(
+    meta.title ?? "Untitled Article"
+  )}</a>\n${escapeHtml(
+    meta.byline ?? meta.siteName ?? new URL(url).hostname
+  )} (<a href="${url}">source</a>)`;
 }
 
 function tryFixUrl(url) {
@@ -112,34 +121,36 @@ function tryFixUrl(url) {
     if (!url.startsWith("http")) {
       url = "http://" + url;
     }
-    const _ = new URL(url);
+    new URL(url); // throws if invalid
     return url;
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
 
 function sha256(input) {
-  // https://stackoverflow.com/a/29109842/5488616
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(input))
-    .digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function fetchMeta(url) {
-  const metaUrl = `${READABILITY_API_URL}?url=${encodeURIComponent(
-    url
-  )}&format=json`;
+  const metaUrl = `${READABILITY_API_URL}?url=${encodeURIComponent(url)}&format=json`;
   const resp = await fetch(metaUrl);
+
   if (!resp.ok) {
     let body = "";
     try {
       body = await resp.text();
-    } catch (_e) { }
-    throw new Error(
-      `Upstream HTTP Error: ${resp.status} ${resp.statusText}\n${body}`
-    );
+    } catch {}
+    throw new Error(`Upstream HTTP Error: ${resp.status} ${resp.statusText}\n${body}`);
   }
+
   return await resp.json();
 }
