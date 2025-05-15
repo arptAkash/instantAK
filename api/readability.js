@@ -7,7 +7,7 @@ const createDOMPurify = require("dompurify");
 const { APP_URL, constructIvUrl, DEFAULT_USER_AGENT_SUFFIX, FALLBACK_USER_AGENT } = require("./_common.js");
 
 module.exports = async (request, response) => {
-  if ((request.headers["user-agent"] ?? "").includes("readability-bot")) {
+  if ((request.headers["user-agent"] ?? "").includes("userInstantBot")) {
     response.send(EASTER_EGG_PAGE);
     return;
   }
