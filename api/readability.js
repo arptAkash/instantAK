@@ -186,7 +186,7 @@ function render(meta) {
     <footer class="section page-footer is-size-7">
       <small>The article(<a title="Telegram Intant View link" href="${constructIvUrl(url)}">IV</a>) is scraped and extracted from <a title="Source link" href="${url}" target="_blank">${htmlEntitiesEscape(
     siteName
-  )}</a> by <a href="${APP_URL}">readability-bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
+  )}</a> by <a href="${APP_URL}">Instant Read Bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
     </footer>
   </main>
 </body>
@@ -232,7 +232,6 @@ function isValidUrl(url) {
 const EASTER_EGG_PAGE = `<html>
 <head><title>Catastrophic Server Error</title></head>
 <body>
-  <p>Server is down. (<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">🛠︎ Debug</a>)</p>
 </body>
 </html>
 `;
