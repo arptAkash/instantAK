@@ -9,7 +9,7 @@
 
 <main class="section is-medium columns is-flex is-vcentered">
 	<div class="container is-max-desktop has-text-centered">
-		<h1 class="title">Readability Bot</h1>
+		<h1 class="title">Instant Read Bot</h1>
 		<form action="/api/readability" method="get" class="search-form">
 			<div class="field has-addons">
 				<p class="control is-expanded">
