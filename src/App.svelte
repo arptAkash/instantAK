@@ -17,7 +17,7 @@
 						name="url"
 						type="url"
 						required
-						placeholder='Link to an "unreadable" article'
+						placeholder='Link to an article'
 						bind:this={inputRef}
 						class="input is-rounded has-text-centered search-box"
 					/>
