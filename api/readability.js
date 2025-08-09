@@ -1,3 +1,4 @@
+// readable.js — updated
 const { Readability } = require("@mozilla/readability");
 const fetch = require("node-fetch");
 const { JSDOM } = require("jsdom");
@@ -7,7 +8,7 @@ const createDOMPurify = require("dompurify");
 const { APP_URL, constructIvUrl, DEFAULT_USER_AGENT_SUFFIX, FALLBACK_USER_AGENT } = require("./_common.js");
 
 module.exports = async (request, response) => {
-  if ((request.headers["user-agent"] ?? "").includes("userInstantBot")) {
+  if ((request.headers["user-agent"] ?? "").includes("readability-bot")) {
     response.send(EASTER_EGG_PAGE);
     return;
   }
@@ -65,7 +66,14 @@ module.exports = async (request, response) => {
     meta.byline = stripRepeatedWhitespace(meta.byline);
     meta.siteName = stripRepeatedWhitespace(meta.siteName);
     meta.excerpt = stripRepeatedWhitespace(meta.excerpt);
-    meta.content = DOMPurify.sanitize(article_content ?? meta.content);
+
+    // ----------------------------
+    // Transform content safely BEFORE final export:
+    // convert <p><img></p> → <figure><img/><figcaption>...</figcaption></figure>
+    // resolve relative image URLs to absolute, and sanitize the final fragment.
+    // ----------------------------
+    meta.content = transformImageParagraphsAndSanitize(article_content ?? meta.content, url);
+
     meta.imageUrl = (ogImage || {}).content;
   } catch (e) {
     console.error(e);
@@ -80,6 +88,106 @@ module.exports = async (request, response) => {
     response.send(render(meta));
   }
 };
+
+/**
+ * transformImageParagraphsAndSanitize(rawHtml, baseUrl)
+ *
+ * - converts paragraphs that contain ONLY an <img> (and maybe whitespace) into <figure>
+ * - if image has a non-filename-like alt text, append <figcaption>alt</figcaption>
+ * - resolves relative img src to absolute using baseUrl
+ * - returns sanitized HTML string (body innerHTML)
+ */
+function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
+  // create a temporary DOM for transformations
+  const tmpDom = new JSDOM(rawHtml, { url: baseUrl });
+  const tmpDoc = tmpDom.window.document;
+
+  // helper to detect filename-like alt strings (IMG_1234.JPG, img123.png, etc.)
+  function looksLikeFilename(str) {
+    if (!str) return true;
+    const trimmed = str.trim();
+    // typical filenames: IMG_1234.JPG or 12345.jpg or myphoto-01.png
+    if (/^[\w\-. ]+\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(trimmed)) return true;
+    if (/^IMG[_-]?\d+/i.test(trimmed)) return true;
+    if (/^\d{3,}_\d+/.test(trimmed)) return true;
+    // if it's a single token with no spaces and not letters, treat as filename-ish
+    if (!/\s/.test(trimmed) && /^[^a-zA-Z]*$/.test(trimmed)) return true;
+    return false;
+  }
+
+  // resolve relative URLs for an <img> element
+  function resolveImgSrc(imgEl) {
+    const srcAttr = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
+    if (!srcAttr) return;
+    // if already absolute (has scheme), skip
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(srcAttr)) {
+      imgEl.src = srcAttr;
+      return;
+    }
+    try {
+      imgEl.src = new URL(srcAttr, baseUrl).href;
+    } catch (e) {
+      // leave as-is on failure
+      imgEl.src = srcAttr;
+    }
+  }
+
+  // Process <p> elements
+  const paragraphs = Array.from(tmpDoc.querySelectorAll('p'));
+  for (const p of paragraphs) {
+    // filter out comment nodes and whitespace-only text nodes
+    const meaningfulChildren = Array.from(p.childNodes).filter((node) => {
+      if (node.nodeType === tmpDom.window.Node.COMMENT_NODE) return false;
+      if (node.nodeType === tmpDom.window.Node.TEXT_NODE) {
+        return node.textContent.trim().length > 0;
+      }
+      // element nodes (IMG, SPAN etc) count as meaningful
+      return true;
+    });
+
+    // case A: paragraph contains exactly one meaningful child and it's an <img>
+    if (meaningfulChildren.length === 1 &&
+        meaningfulChildren[0].nodeType === tmpDom.window.Node.ELEMENT_NODE &&
+        meaningfulChildren[0].tagName === 'IMG') {
+
+      const img = meaningfulChildren[0];
+      resolveImgSrc(img);
+
+      // create <figure> and move the image into it
+      const figure = tmpDoc.createElement('figure');
+      // move the actual element (not clone) — appendChild removes it from original parent
+      figure.appendChild(img);
+
+      // add figcaption from alt if alt is meaningful
+      const alt = img.getAttribute('alt') || '';
+      if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
+        const figcap = tmpDoc.createElement('figcaption');
+        figcap.textContent = alt.trim();
+        figure.appendChild(figcap);
+      }
+
+      // replace the <p> with the new <figure>
+      p.replaceWith(figure);
+    } else {
+      // For paragraphs that have images mixed with text or multiple nodes,
+      // just resolve image src attributes so nothing is left relative.
+      for (const img of p.querySelectorAll('img')) {
+        resolveImgSrc(img);
+      }
+    }
+  }
+
+  // Also resolve any img srcs outside paragraphs
+  for (const img of tmpDoc.querySelectorAll('img')) {
+    resolveImgSrc(img);
+  }
+
+  // Now sanitize the transformed HTML using a DOMPurify instance tied to tmpDom
+  const DOMPurifyForTmp = createDOMPurify(tmpDom.window);
+  const sanitized = DOMPurifyForTmp.sanitize(tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML);
+
+  return sanitized;
+}
 
 function render(meta) {
   let { lang, title, byline: author, siteName, content, url, excerpt, imageUrl } = meta;
@@ -163,6 +271,17 @@ function render(meta) {
       marginLeft: 1rem;
       marginRight: 1rem;
     }
+
+    figure {
+      margin: 1.5rem 0;
+      text-align: center;
+    }
+
+    figcaption {
+      font-size: 0.9em;
+      color: #666;
+      margin-top: 0.5rem;
+    }
   </style>
 </head>
 
@@ -186,7 +305,7 @@ function render(meta) {
     <footer class="section page-footer is-size-7">
       <small>The article(<a title="Telegram Intant View link" href="${constructIvUrl(url)}">IV</a>) is scraped and extracted from <a title="Source link" href="${url}" target="_blank">${htmlEntitiesEscape(
     siteName
-  )}</a> by <a href="${APP_URL}">Instant Read Bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
+  )}</a> by <a href="${APP_URL}">readability-bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
     </footer>
   </main>
 </body>
@@ -232,6 +351,7 @@ function isValidUrl(url) {
 const EASTER_EGG_PAGE = `<html>
 <head><title>Catastrophic Server Error</title></head>
 <body>
+  <p>Server is down. (<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">🛠︎ Debug</a>)</p>
 </body>
 </html>
 `;
