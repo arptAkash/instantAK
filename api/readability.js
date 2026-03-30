@@ -92,34 +92,48 @@ module.exports = async (request, response) => {
 /**
  * transformImageParagraphsAndSanitize(rawHtml, baseUrl)
  *
- * - Converts any <p> that contains <img> into proper <figure><img>...</figure>
- * - Adds <figcaption> from alt text when it makes sense
- * - Resolves all relative image URLs to absolute
- * - Sanitizes the final HTML
+ * FIXED for Indian Express and similar lazy-loading sites:
+ * - Handles <p><img srcset=... data-srcset=... data-lazy-type=...></p>
+ * - Converts ANY <p> containing an <img> into proper <figure>
+ * - Keeps srcset, sizes, alt, etc.
+ * - Resolves relative URLs
+ * - Adds <figcaption> only when alt is meaningful
  */
 function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
   const tmpDom = new JSDOM(rawHtml, { url: baseUrl });
   const tmpDoc = tmpDom.window.document;
 
-  // Helper: resolve relative img src → absolute
+  // Helper: resolve relative → absolute src / srcset / data-srcset
   function resolveImgSrc(imgEl) {
-    const srcAttr = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
-    if (!srcAttr) return;
-
-    // Already absolute
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(srcAttr)) {
-      imgEl.src = srcAttr;
-      return;
+    // src
+    let src = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
+    if (src && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) {
+      try { src = new URL(src, baseUrl).href; } catch (e) {}
+      imgEl.setAttribute('src', src);
     }
 
-    try {
-      imgEl.src = new URL(srcAttr, baseUrl).href;
-    } catch (e) {
-      imgEl.src = srcAttr; // leave as-is
+    // srcset
+    let srcset = imgEl.getAttribute('srcset') || imgEl.getAttribute('data-srcset') || "";
+    if (srcset) {
+      const newSrcset = srcset.split(',').map(part => {
+        const [url, size] = part.trim().split(/\s+/);
+        if (!url) return part;
+        let absUrl = url;
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
+          try { absUrl = new URL(url, baseUrl).href; } catch (e) {}
+        }
+        return size ? `${absUrl} ${size}` : absUrl;
+      }).join(', ');
+      imgEl.setAttribute('srcset', newSrcset);
     }
+
+    // Clean up lazy attributes (optional but cleaner)
+    imgEl.removeAttribute('data-src');
+    imgEl.removeAttribute('data-srcset');
+    imgEl.removeAttribute('data-lazy-type');
   }
 
-  // Helper: detect useless filename-like alt texts
+  // Helper: detect useless filename-like alt
   function looksLikeFilename(str) {
     if (!str) return true;
     const trimmed = str.trim();
@@ -130,18 +144,19 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
     return false;
   }
 
-  // === MAIN FIX: Handle every <p> that contains image(s) ===
+  // === MAIN FIX: Catch EVERY <p> that contains an <img> ===
   const paragraphs = Array.from(tmpDoc.querySelectorAll('p'));
   for (const p of paragraphs) {
     const imgs = Array.from(p.querySelectorAll('img'));
 
     if (imgs.length > 0) {
       for (const img of imgs) {
-        resolveImgSrc(img);
+        resolveImgSrc(img);               // fix lazy + relative URLs
 
         const figure = tmpDoc.createElement('figure');
-        figure.appendChild(img);
+        figure.appendChild(img);          // move the img
 
+        // Add figcaption only if alt is useful
         const alt = img.getAttribute('alt') || '';
         if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
           const figcap = tmpDoc.createElement('figcaption');
@@ -149,10 +164,10 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
           figure.appendChild(figcap);
         }
 
-        // Insert figure before the original <p>
+        // Insert <figure> before the old <p>
         p.parentNode.insertBefore(figure, p);
 
-        // If the <p> is now empty (only had the image), remove it
+        // Remove the now-empty <p> if it only contained the image
         if (p.textContent.trim() === '' && p.querySelectorAll('img').length === 0) {
           p.remove();
         }
@@ -160,12 +175,12 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
     }
   }
 
-  // Also fix any remaining <img> tags that are outside <p>
+  // Final cleanup: any stray <img> outside <p> (just in case)
   for (const img of tmpDoc.querySelectorAll('img')) {
     resolveImgSrc(img);
   }
 
-  // Final sanitization
+  // Sanitize
   const DOMPurifyForTmp = createDOMPurify(tmpDom.window);
   const sanitized = DOMPurifyForTmp.sanitize(
     tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML
