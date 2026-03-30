@@ -73,6 +73,23 @@ module.exports = async (request, response) => {
     // resolve relative image URLs to absolute, and sanitize the final fragment.
     // ----------------------------
     meta.content = transformImageParagraphsAndSanitize(article_content ?? meta.content, url);
+    let cleaned = meta.content;
+    cleaned = cleaned.replace(/<p>Story continues below this ad<\/p>/gi, '');
+    cleaned = cleaned.replace(
+      /<figure>[\s\S]*?alt="short article insert"[\s\S]*?<\/figure>/gi,
+      ''
+    );
+    if (meta.imageUrl) {
+      const leadFigure = `
+        <figure>
+          <img src="${htmlEntitiesEscape(meta.imageUrl)}"
+               alt="${htmlEntitiesEscape(meta.title)}"
+               style="max-width:100%; height:auto; border-radius:12px;">
+        </figure>`;
+      cleaned = leadFigure + cleaned;
+    }
+    meta.content = cleaned;
+    
 
     meta.imageUrl = (ogImage || {}).content;
   } catch (e) {
