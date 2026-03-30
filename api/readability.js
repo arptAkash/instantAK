@@ -92,50 +92,49 @@ module.exports = async (request, response) => {
 /**
  * transformImageParagraphsAndSanitize(rawHtml, baseUrl)
  *
- * - converts paragraphs that contain ONLY an <img> (and maybe whitespace) into <figure>
- * - if image has a non-filename-like alt text, append <figcaption>alt</figcaption>
- * - resolves relative img src to absolute using baseUrl
- * - returns sanitized HTML string (body innerHTML)
+ * - Converts any <p> that contains <img> into proper <figure><img>...</figure>
+ * - Adds <figcaption> from alt text when it makes sense
+ * - Resolves all relative image URLs to absolute
+ * - Sanitizes the final HTML
  */
 function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
-  // create a temporary DOM for transformations
   const tmpDom = new JSDOM(rawHtml, { url: baseUrl });
   const tmpDoc = tmpDom.window.document;
 
-  // helper to detect filename-like alt strings (IMG_1234.JPG, img123.png, etc.)
-  function looksLikeFilename(str) {
-    if (!str) return true;
-    const trimmed = str.trim();
-    // typical filenames: IMG_1234.JPG or 12345.jpg or myphoto-01.png
-    if (/^[\w\-. ]+\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(trimmed)) return true;
-    if (/^IMG[_-]?\d+/i.test(trimmed)) return true;
-    if (/^\d{3,}_\d+/.test(trimmed)) return true;
-    // if it's a single token with no spaces and not letters, treat as filename-ish
-    if (!/\s/.test(trimmed) && /^[^a-zA-Z]*$/.test(trimmed)) return true;
-    return false;
-  }
-
-  // resolve relative URLs for an <img> element
+  // Helper: resolve relative img src → absolute
   function resolveImgSrc(imgEl) {
     const srcAttr = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
     if (!srcAttr) return;
-    // if already absolute (has scheme), skip
+
+    // Already absolute
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(srcAttr)) {
       imgEl.src = srcAttr;
       return;
     }
+
     try {
       imgEl.src = new URL(srcAttr, baseUrl).href;
     } catch (e) {
-      // leave as-is on failure
-      imgEl.src = srcAttr;
+      imgEl.src = srcAttr; // leave as-is
     }
   }
 
-  // Process <p> elements
+  // Helper: detect useless filename-like alt texts
+  function looksLikeFilename(str) {
+    if (!str) return true;
+    const trimmed = str.trim();
+    if (/^[\w\-. ]+\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(trimmed)) return true;
+    if (/^IMG[_-]?\d+/i.test(trimmed)) return true;
+    if (/^\d{3,}_\d+/.test(trimmed)) return true;
+    if (!/\s/.test(trimmed) && /^[^a-zA-Z]*$/.test(trimmed)) return true;
+    return false;
+  }
+
+  // === MAIN FIX: Handle every <p> that contains image(s) ===
   const paragraphs = Array.from(tmpDoc.querySelectorAll('p'));
   for (const p of paragraphs) {
     const imgs = Array.from(p.querySelectorAll('img'));
+
     if (imgs.length > 0) {
       for (const img of imgs) {
         resolveImgSrc(img);
@@ -150,23 +149,30 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
           figure.appendChild(figcap);
         }
 
-        // Insert figure before the p, then remove img from p
+        // Insert figure before the original <p>
         p.parentNode.insertBefore(figure, p);
-        // If p now has only whitespace left, remove it
-        if (p.textContent.trim() === '') p.remove();
+
+        // If the <p> is now empty (only had the image), remove it
+        if (p.textContent.trim() === '' && p.querySelectorAll('img').length === 0) {
+          p.remove();
+        }
       }
     }
   }
 
-  // Also handle any remaining imgs outside paragraphs
+  // Also fix any remaining <img> tags that are outside <p>
   for (const img of tmpDoc.querySelectorAll('img')) {
     resolveImgSrc(img);
   }
 
+  // Final sanitization
   const DOMPurifyForTmp = createDOMPurify(tmpDom.window);
-  return DOMPurifyForTmp.sanitize(tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML);
-}
+  const sanitized = DOMPurifyForTmp.sanitize(
+    tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML
+  );
 
+  return sanitized;
+}
 function render(meta) {
   let { lang, title, byline: author, siteName, content, url, excerpt, imageUrl } = meta;
   const genDate = new Date();
