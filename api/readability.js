@@ -135,58 +135,36 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
   // Process <p> elements
   const paragraphs = Array.from(tmpDoc.querySelectorAll('p'));
   for (const p of paragraphs) {
-    // filter out comment nodes and whitespace-only text nodes
-    const meaningfulChildren = Array.from(p.childNodes).filter((node) => {
-      if (node.nodeType === tmpDom.window.Node.COMMENT_NODE) return false;
-      if (node.nodeType === tmpDom.window.Node.TEXT_NODE) {
-        return node.textContent.trim().length > 0;
-      }
-      // element nodes (IMG, SPAN etc) count as meaningful
-      return true;
-    });
-
-    // case A: paragraph contains exactly one meaningful child and it's an <img>
-    if (meaningfulChildren.length === 1 &&
-        meaningfulChildren[0].nodeType === tmpDom.window.Node.ELEMENT_NODE &&
-        meaningfulChildren[0].tagName === 'IMG') {
-
-      const img = meaningfulChildren[0];
-      resolveImgSrc(img);
-
-      // create <figure> and move the image into it
-      const figure = tmpDoc.createElement('figure');
-      // move the actual element (not clone) — appendChild removes it from original parent
-      figure.appendChild(img);
-
-      // add figcaption from alt if alt is meaningful
-      const alt = img.getAttribute('alt') || '';
-      if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
-        const figcap = tmpDoc.createElement('figcaption');
-        figcap.textContent = alt.trim();
-        figure.appendChild(figcap);
-      }
-
-      // replace the <p> with the new <figure>
-      p.replaceWith(figure);
-    } else {
-      // For paragraphs that have images mixed with text or multiple nodes,
-      // just resolve image src attributes so nothing is left relative.
-      for (const img of p.querySelectorAll('img')) {
+    const imgs = Array.from(p.querySelectorAll('img'));
+    if (imgs.length > 0) {
+      for (const img of imgs) {
         resolveImgSrc(img);
+
+        const figure = tmpDoc.createElement('figure');
+        figure.appendChild(img);
+
+        const alt = img.getAttribute('alt') || '';
+        if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
+          const figcap = tmpDoc.createElement('figcaption');
+          figcap.textContent = alt.trim();
+          figure.appendChild(figcap);
+        }
+
+        // Insert figure before the p, then remove img from p
+        p.parentNode.insertBefore(figure, p);
+        // If p now has only whitespace left, remove it
+        if (p.textContent.trim() === '') p.remove();
       }
     }
   }
 
-  // Also resolve any img srcs outside paragraphs
+  // Also handle any remaining imgs outside paragraphs
   for (const img of tmpDoc.querySelectorAll('img')) {
     resolveImgSrc(img);
   }
 
-  // Now sanitize the transformed HTML using a DOMPurify instance tied to tmpDom
   const DOMPurifyForTmp = createDOMPurify(tmpDom.window);
-  const sanitized = DOMPurifyForTmp.sanitize(tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML);
-
-  return sanitized;
+  return DOMPurifyForTmp.sanitize(tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML);
 }
 
 function render(meta) {
