@@ -205,129 +205,116 @@ function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
 
   return sanitized;
 }
+
 function render(meta) {
-  let { lang, title, byline: author, siteName, content, url, excerpt, imageUrl } = meta;
-  const genDate = new Date();
-  const langAttr = lang ? `lang="${lang}"` : "";
-  const byline =
-    [author, siteName].filter((v) => v).join(" • ") || new URL(url).hostname;
-  siteName = siteName || new URL(url).hostname;
-  const ogSiteName = siteName
-    ? `<meta property="og:site_name" content="${htmlEntitiesEscape(siteName)}">`
-    : "";
-  const ogAuthor = byline
-    ? `<meta property="article:author" content="${htmlEntitiesEscape(byline)}">`
-    : "";
-  const ogImage = imageUrl ? `<meta property="og:image" content="${htmlEntitiesEscape(imageUrl)}"/>`
-    : "";
+  let { title, byline: author, siteName, content, url, excerpt, imageUrl, publishedTime } = meta;
+
+  // Nice readable date
+  let dateStr = '';
+  if (publishedTime) {
+    try {
+      const date = new Date(publishedTime);
+      dateStr = date.toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    } catch (e) {
+      dateStr = publishedTime;
+    }
+  }
+
+  // Byline
+  const bylineText = [
+    siteName || new URL(url).hostname,
+    author
+  ].filter(Boolean).join(' • ');
+
+  // Final cleaned content (extra safety layer)
+  let finalContent = content || '';
+
+  // Remove leftover Indian Express ad junk
+  finalContent = finalContent
+    .replace(/Story continues below this ad/gi, '')
+    .replace(/<figure>[\s\S]*?alt="short article insert"[\s\S]*?<\/figure>/gi, '')
+    .replace(/<div>\s*<p>Story continues below this ad<\/p>\s*<\/div>/gi, '');
+
+  // Force featured image at the very top if we have one
+  let leadImageHTML = '';
+  if (imageUrl) {
+    leadImageHTML = `
+      <figure style="margin: 2rem 0 2.5rem 0;">
+        <img 
+          src="${htmlEntitiesEscape(imageUrl)}" 
+          alt="${htmlEntitiesEscape(title)}"
+          style="max-width: 100%; height: auto; border-radius: 12px; display: block; margin: 0 auto;">
+      </figure>`;
+  }
 
   return `<!DOCTYPE html>
-<html ${langAttr}>
-
+<html lang="${meta.lang || 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="same-origin">
-  <meta http-equiv="Content-Security-Policy" content="script-src 'none';">
-  <meta http-equiv="Content-Security-Policy" content="frame-src 'none';">
-  <meta name="description" content="${htmlEntitiesEscape(excerpt)}">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'none'; frame-src 'none';">
+  <meta name="description" content="${htmlEntitiesEscape(excerpt || title)}">
   <meta property="og:type" content="article">
   <meta property="og:title" content="${htmlEntitiesEscape(title)}">
-  ${ogSiteName}
-  <meta property="og:description" content="${htmlEntitiesEscape(excerpt)}">
-  ${ogAuthor}
-  ${ogImage}
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css">
+  <meta property="og:site_name" content="${htmlEntitiesEscape(siteName || new URL(url).hostname)}">
+  <meta property="og:description" content="${htmlEntitiesEscape(excerpt || title)}">
+  <meta property="article:author" content="${htmlEntitiesEscape(bylineText)}">
+  \( {imageUrl ? `<meta property="og:image" content=" \){htmlEntitiesEscape(imageUrl)}">` : ''}
   <title>${htmlEntitiesEscape(title)}</title>
+
+  <!-- Tailwind CSS CDN - beautiful & lightweight for IV -->
+  <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    * {
-      font-family: serif;
-    }
-
-    p {
-      line-height: 1.5;
-    }
-
-    p {
-      margin-top: 1.5rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .byline {
-      padding-top: 0.5rem;
-      font-style: normal;
-    }
-
-    .byline a {
-      text-decoration: none;
-      color: #79828B;
-    }
-
-    .byline .seperator {
-      /* content: "\\2022"; */
-      padding: 0 5px;
-    }
-
-    .article-header {
-      padding-bottom: 1.5rem;
-    }
-
-    .article-body {
-      padding-top: 0rem;
-      padding-bottom: 0rem;
-    }
-
-    .page-footer {
-      padding-top: 0rem;excerpt
-      padding-bottom: 1.0rem;
-    }
-
-    hr {
-      marginLeft: 1rem;
-      marginRight: 1rem;
-    }
-
-    figure {
-      margin: 1.5rem 0;
-      text-align: center;
-    }
-
-    figcaption {
-      font-size: 0.9em;
-      color: #666;
-      margin-top: 0.5rem;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Georgia:wght@400;500&amp;display=swap');
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .prose { font-family: 'Georgia', serif; line-height: 1.75; }
+    .prose h1, .prose h2, .prose h3 { font-family: 'Inter', system-ui, sans-serif; }
+    figure img { border-radius: 12px; }
+    .byline { color: #555; font-size: 0.95rem; }
   </style>
 </head>
+<body class="bg-white text-zinc-900 max-w-3xl mx-auto px-6 py-8">
 
-<body>
-  <main class="container is-max-desktop">
-    <header class="section article-header">
-      <h1 class="title">
-        ${htmlEntitiesEscape(title)}
-      </h1>
-      <address class="subtitle byline" >
-        <a rel="author" href="${url}" target="_blank">
-        ${htmlEntitiesEscape(byline)}
-        </a>
-      </address>
-    </header>
-    <article class="section article-body is-size-5 content">
-      ${content}
-    </article>
+  <!-- Title -->
+  <h1 class="text-4xl leading-tight font-semibold tracking-tight mb-6">
+    ${htmlEntitiesEscape(title)}
+  </h1>
 
-    <hr />
-    <footer class="section page-footer is-size-7">
-      <small>The article(<a title="Telegram Intant View link" href="${constructIvUrl(url)}">IV</a>) is scraped and extracted from <a title="Source link" href="${url}" target="_blank">${htmlEntitiesEscape(
-    siteName
-  )}</a> by <a href="${APP_URL}">readability-bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
-    </footer>
-  </main>
+  <!-- Byline -->
+  <div class="byline flex flex-wrap items-center gap-x-3 gap-y-1 mb-8 text-sm">
+    <span>${htmlEntitiesEscape(bylineText)}</span>
+    ${dateStr ? `<span class="text-zinc-500">• ${dateStr}</span>` : ''}
+  </div>
+
+  <!-- Featured Image (forced at top) -->
+  ${leadImageHTML}
+
+  <!-- Article Content -->
+  <article class="prose prose-zinc max-w-none text-[1.1rem] leading-relaxed">
+    ${finalContent}
+  </article>
+
+  <hr class="my-12 border-zinc-200">
+
+  <!-- Footer (exactly as you had before) -->
+  <footer class="text-xs text-zinc-500">
+    <small>
+      The article (<a href="${constructIvUrl(url)}" title="Telegram Instant View link">IV</a>) 
+      is scraped and extracted from 
+      <a href="\( {url}" target="_blank"> \){htmlEntitiesEscape(siteName || new URL(url).hostname)}</a> 
+      by <a href="${APP_URL}">readability-bot</a> at 
+      <time datetime="\( {new Date().toISOString()}"> \){new Date().toString()}</time>.
+    </small>
+  </footer>
+
 </body>
-
-</html>
-`;
+</html>`;
 }
 
 function constructUpstreamRequestHeaders(headers) {
