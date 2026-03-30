@@ -73,23 +73,6 @@ module.exports = async (request, response) => {
     // resolve relative image URLs to absolute, and sanitize the final fragment.
     // ----------------------------
     meta.content = transformImageParagraphsAndSanitize(article_content ?? meta.content, url);
-    let cleaned = meta.content;
-    cleaned = cleaned.replace(/<p>Story continues below this ad<\/p>/gi, '');
-    cleaned = cleaned.replace(
-      /<figure>[\s\S]*?alt="short article insert"[\s\S]*?<\/figure>/gi,
-      ''
-    );
-    if (meta.imageUrl) {
-      const leadFigure = `
-        <figure>
-          <img src="${htmlEntitiesEscape(meta.imageUrl)}"
-               alt="${htmlEntitiesEscape(meta.title)}"
-               style="max-width:100%; height:auto; border-radius:12px;">
-        </figure>`;
-      cleaned = leadFigure + cleaned;
-    }
-    meta.content = cleaned;
-    
 
     meta.imageUrl = (ogImage || {}).content;
   } catch (e) {
@@ -109,212 +92,226 @@ module.exports = async (request, response) => {
 /**
  * transformImageParagraphsAndSanitize(rawHtml, baseUrl)
  *
- * FIXED for Indian Express and similar lazy-loading sites:
- * - Handles <p><img srcset=... data-srcset=... data-lazy-type=...></p>
- * - Converts ANY <p> containing an <img> into proper <figure>
- * - Keeps srcset, sizes, alt, etc.
- * - Resolves relative URLs
- * - Adds <figcaption> only when alt is meaningful
+ * - converts paragraphs that contain ONLY an <img> (and maybe whitespace) into <figure>
+ * - if image has a non-filename-like alt text, append <figcaption>alt</figcaption>
+ * - resolves relative img src to absolute using baseUrl
+ * - returns sanitized HTML string (body innerHTML)
  */
 function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
+  // create a temporary DOM for transformations
   const tmpDom = new JSDOM(rawHtml, { url: baseUrl });
   const tmpDoc = tmpDom.window.document;
 
-  // Helper: resolve relative → absolute src / srcset / data-srcset
-  function resolveImgSrc(imgEl) {
-    // src
-    let src = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
-    if (src && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) {
-      try { src = new URL(src, baseUrl).href; } catch (e) {}
-      imgEl.setAttribute('src', src);
-    }
-
-    // srcset
-    let srcset = imgEl.getAttribute('srcset') || imgEl.getAttribute('data-srcset') || "";
-    if (srcset) {
-      const newSrcset = srcset.split(',').map(part => {
-        const [url, size] = part.trim().split(/\s+/);
-        if (!url) return part;
-        let absUrl = url;
-        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
-          try { absUrl = new URL(url, baseUrl).href; } catch (e) {}
-        }
-        return size ? `${absUrl} ${size}` : absUrl;
-      }).join(', ');
-      imgEl.setAttribute('srcset', newSrcset);
-    }
-
-    // Clean up lazy attributes (optional but cleaner)
-    imgEl.removeAttribute('data-src');
-    imgEl.removeAttribute('data-srcset');
-    imgEl.removeAttribute('data-lazy-type');
-  }
-
-  // Helper: detect useless filename-like alt
+  // helper to detect filename-like alt strings (IMG_1234.JPG, img123.png, etc.)
   function looksLikeFilename(str) {
     if (!str) return true;
     const trimmed = str.trim();
+    // typical filenames: IMG_1234.JPG or 12345.jpg or myphoto-01.png
     if (/^[\w\-. ]+\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(trimmed)) return true;
     if (/^IMG[_-]?\d+/i.test(trimmed)) return true;
     if (/^\d{3,}_\d+/.test(trimmed)) return true;
+    // if it's a single token with no spaces and not letters, treat as filename-ish
     if (!/\s/.test(trimmed) && /^[^a-zA-Z]*$/.test(trimmed)) return true;
     return false;
   }
 
-  // === MAIN FIX: Catch EVERY <p> that contains an <img> ===
+  // resolve relative URLs for an <img> element
+  function resolveImgSrc(imgEl) {
+    const srcAttr = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || "";
+    if (!srcAttr) return;
+    // if already absolute (has scheme), skip
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(srcAttr)) {
+      imgEl.src = srcAttr;
+      return;
+    }
+    try {
+      imgEl.src = new URL(srcAttr, baseUrl).href;
+    } catch (e) {
+      // leave as-is on failure
+      imgEl.src = srcAttr;
+    }
+  }
+
+  // Process <p> elements
   const paragraphs = Array.from(tmpDoc.querySelectorAll('p'));
   for (const p of paragraphs) {
-    const imgs = Array.from(p.querySelectorAll('img'));
+    // filter out comment nodes and whitespace-only text nodes
+    const meaningfulChildren = Array.from(p.childNodes).filter((node) => {
+      if (node.nodeType === tmpDom.window.Node.COMMENT_NODE) return false;
+      if (node.nodeType === tmpDom.window.Node.TEXT_NODE) {
+        return node.textContent.trim().length > 0;
+      }
+      // element nodes (IMG, SPAN etc) count as meaningful
+      return true;
+    });
 
-    if (imgs.length > 0) {
-      for (const img of imgs) {
-        resolveImgSrc(img);               // fix lazy + relative URLs
+    // case A: paragraph contains exactly one meaningful child and it's an <img>
+    if (meaningfulChildren.length === 1 &&
+        meaningfulChildren[0].nodeType === tmpDom.window.Node.ELEMENT_NODE &&
+        meaningfulChildren[0].tagName === 'IMG') {
 
-        const figure = tmpDoc.createElement('figure');
-        figure.appendChild(img);          // move the img
+      const img = meaningfulChildren[0];
+      resolveImgSrc(img);
 
-        // Add figcaption only if alt is useful
-        const alt = img.getAttribute('alt') || '';
-        if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
-          const figcap = tmpDoc.createElement('figcaption');
-          figcap.textContent = alt.trim();
-          figure.appendChild(figcap);
-        }
+      // create <figure> and move the image into it
+      const figure = tmpDoc.createElement('figure');
+      // move the actual element (not clone) — appendChild removes it from original parent
+      figure.appendChild(img);
 
-        // Insert <figure> before the old <p>
-        p.parentNode.insertBefore(figure, p);
+      // add figcaption from alt if alt is meaningful
+      const alt = img.getAttribute('alt') || '';
+      if (alt && alt.trim().length > 0 && !looksLikeFilename(alt)) {
+        const figcap = tmpDoc.createElement('figcaption');
+        figcap.textContent = alt.trim();
+        figure.appendChild(figcap);
+      }
 
-        // Remove the now-empty <p> if it only contained the image
-        if (p.textContent.trim() === '' && p.querySelectorAll('img').length === 0) {
-          p.remove();
-        }
+      // replace the <p> with the new <figure>
+      p.replaceWith(figure);
+    } else {
+      // For paragraphs that have images mixed with text or multiple nodes,
+      // just resolve image src attributes so nothing is left relative.
+      for (const img of p.querySelectorAll('img')) {
+        resolveImgSrc(img);
       }
     }
   }
 
-  // Final cleanup: any stray <img> outside <p> (just in case)
+  // Also resolve any img srcs outside paragraphs
   for (const img of tmpDoc.querySelectorAll('img')) {
     resolveImgSrc(img);
   }
 
-  // Sanitize
+  // Now sanitize the transformed HTML using a DOMPurify instance tied to tmpDom
   const DOMPurifyForTmp = createDOMPurify(tmpDom.window);
-  const sanitized = DOMPurifyForTmp.sanitize(
-    tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML
-  );
+  const sanitized = DOMPurifyForTmp.sanitize(tmpDoc.body ? tmpDoc.body.innerHTML : tmpDoc.documentElement.innerHTML);
 
   return sanitized;
 }
 
 function render(meta) {
-  let { title, byline: author, siteName, content, url, excerpt, imageUrl, publishedTime } = meta;
-
-  // Nice readable date
-  let dateStr = '';
-  if (publishedTime) {
-    try {
-      const date = new Date(publishedTime);
-      dateStr = date.toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    } catch (e) {
-      dateStr = publishedTime;
-    }
-  }
-
-  // Byline
-  const bylineText = [
-    siteName || new URL(url).hostname,
-    author
-  ].filter(Boolean).join(' • ');
-
-  // Final cleaned content (extra safety layer)
-  let finalContent = content || '';
-
-  // Remove leftover Indian Express ad junk
-  finalContent = finalContent
-    .replace(/Story continues below this ad/gi, '')
-    .replace(/<figure>[\s\S]*?alt="short article insert"[\s\S]*?<\/figure>/gi, '')
-    .replace(/<div>\s*<p>Story continues below this ad<\/p>\s*<\/div>/gi, '');
-
-  // Force featured image at the very top if we have one
-  let leadImageHTML = '';
-  if (imageUrl) {
-    leadImageHTML = `
-      <figure style="margin: 2rem 0 2.5rem 0;">
-        <img 
-          src="${htmlEntitiesEscape(imageUrl)}" 
-          alt="${htmlEntitiesEscape(title)}"
-          style="max-width: 100%; height: auto; border-radius: 12px; display: block; margin: 0 auto;">
-      </figure>`;
-  }
+  let { lang, title, byline: author, siteName, content, url, excerpt, imageUrl } = meta;
+  const genDate = new Date();
+  const langAttr = lang ? `lang="${lang}"` : "";
+  const byline =
+    [author, siteName].filter((v) => v).join(" • ") || new URL(url).hostname;
+  siteName = siteName || new URL(url).hostname;
+  const ogSiteName = siteName
+    ? `<meta property="og:site_name" content="${htmlEntitiesEscape(siteName)}">`
+    : "";
+  const ogAuthor = byline
+    ? `<meta property="article:author" content="${htmlEntitiesEscape(byline)}">`
+    : "";
+  const ogImage = imageUrl ? `<meta property="og:image" content="${htmlEntitiesEscape(imageUrl)}"/>`
+    : "";
 
   return `<!DOCTYPE html>
-<html lang="${meta.lang || 'en'}">
+<html ${langAttr}>
+
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="same-origin">
-  <meta http-equiv="Content-Security-Policy" content="script-src 'none'; frame-src 'none';">
-  <meta name="description" content="${htmlEntitiesEscape(excerpt || title)}">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="frame-src 'none';">
+  <meta name="description" content="${htmlEntitiesEscape(excerpt)}">
   <meta property="og:type" content="article">
   <meta property="og:title" content="${htmlEntitiesEscape(title)}">
-  <meta property="og:site_name" content="${htmlEntitiesEscape(siteName || new URL(url).hostname)}">
-  <meta property="og:description" content="${htmlEntitiesEscape(excerpt || title)}">
-  <meta property="article:author" content="${htmlEntitiesEscape(bylineText)}">
-  \( {imageUrl ? `<meta property="og:image" content=" \){htmlEntitiesEscape(imageUrl)}">` : ''}
+  ${ogSiteName}
+  <meta property="og:description" content="${htmlEntitiesEscape(excerpt)}">
+  ${ogAuthor}
+  ${ogImage}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css">
   <title>${htmlEntitiesEscape(title)}</title>
-
-  <!-- Tailwind CSS CDN - beautiful & lightweight for IV -->
-  <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Georgia:wght@400;500&amp;display=swap');
-    body { font-family: 'Inter', system-ui, sans-serif; }
-    .prose { font-family: 'Georgia', serif; line-height: 1.75; }
-    .prose h1, .prose h2, .prose h3 { font-family: 'Inter', system-ui, sans-serif; }
-    figure img { border-radius: 12px; }
-    .byline { color: #555; font-size: 0.95rem; }
+    * {
+      font-family: serif;
+    }
+
+    p {
+      line-height: 1.5;
+    }
+
+    p {
+      margin-top: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .byline {
+      padding-top: 0.5rem;
+      font-style: normal;
+    }
+
+    .byline a {
+      text-decoration: none;
+      color: #79828B;
+    }
+
+    .byline .seperator {
+      /* content: "\\2022"; */
+      padding: 0 5px;
+    }
+
+    .article-header {
+      padding-bottom: 1.5rem;
+    }
+
+    .article-body {
+      padding-top: 0rem;
+      padding-bottom: 0rem;
+    }
+
+    .page-footer {
+      padding-top: 0rem;excerpt
+      padding-bottom: 1.0rem;
+    }
+
+    hr {
+      marginLeft: 1rem;
+      marginRight: 1rem;
+    }
+
+    figure {
+      margin: 1.5rem 0;
+      text-align: center;
+    }
+
+    figcaption {
+      font-size: 0.9em;
+      color: #666;
+      margin-top: 0.5rem;
+    }
   </style>
 </head>
-<body class="bg-white text-zinc-900 max-w-3xl mx-auto px-6 py-8">
 
-  <!-- Title -->
-  <h1 class="text-4xl leading-tight font-semibold tracking-tight mb-6">
-    ${htmlEntitiesEscape(title)}
-  </h1>
+<body>
+  <main class="container is-max-desktop">
+    <header class="section article-header">
+      <h1 class="title">
+        ${htmlEntitiesEscape(title)}
+      </h1>
+      <address class="subtitle byline" >
+        <a rel="author" href="${url}" target="_blank">
+        ${htmlEntitiesEscape(byline)}
+        </a>
+      </address>
+    </header>
+    <article class="section article-body is-size-5 content">
+      ${content}
+    </article>
 
-  <!-- Byline -->
-  <div class="byline flex flex-wrap items-center gap-x-3 gap-y-1 mb-8 text-sm">
-    <span>${htmlEntitiesEscape(bylineText)}</span>
-    ${dateStr ? `<span class="text-zinc-500">• ${dateStr}</span>` : ''}
-  </div>
-
-  <!-- Featured Image (forced at top) -->
-  ${leadImageHTML}
-
-  <!-- Article Content -->
-  <article class="prose prose-zinc max-w-none text-[1.1rem] leading-relaxed">
-    ${finalContent}
-  </article>
-
-  <hr class="my-12 border-zinc-200">
-
-  <!-- Footer (exactly as you had before) -->
-  <footer class="text-xs text-zinc-500">
-    <small>
-      The article (<a href="${constructIvUrl(url)}" title="Telegram Instant View link">IV</a>) 
-      is scraped and extracted from 
-      <a href="\( {url}" target="_blank"> \){htmlEntitiesEscape(siteName || new URL(url).hostname)}</a> 
-      by <a href="${APP_URL}">readability-bot</a> at 
-      <time datetime="\( {new Date().toISOString()}"> \){new Date().toString()}</time>.
-    </small>
-  </footer>
-
+    <hr />
+    <footer class="section page-footer is-size-7">
+      <small>The article(<a title="Telegram Intant View link" href="${constructIvUrl(url)}">IV</a>) is scraped and extracted from <a title="Source link" href="${url}" target="_blank">${htmlEntitiesEscape(
+    siteName
+  )}</a> by <a href="${APP_URL}">readability-bot</a> at <time datetime="${genDate.toISOString()}">${genDate.toString()}</time>.</small>
+    </footer>
+  </main>
 </body>
-</html>`;
+
+</html>
+`;
 }
 
 function constructUpstreamRequestHeaders(headers) {
