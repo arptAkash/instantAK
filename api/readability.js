@@ -1,4 +1,3 @@
-// readable.js — updated
 const { Readability } = require("@mozilla/readability");
 const fetch = require("node-fetch");
 const { JSDOM } = require("jsdom");
@@ -16,7 +15,7 @@ module.exports = async (request, response) => {
   if (!format) {
     format = type; // the type param will be deprecated in favor of format
   }
-  if (!url & (format !== "json")) {
+  if (!url && (format !== "json")) {
     response.redirect(APP_URL);
     return;
   }
@@ -44,6 +43,16 @@ module.exports = async (request, response) => {
     }
 
     let article_content = null;
+
+    // Indian Express premium article handling
+    // Only use #pcl-full-content when the premium div exists.
+    if (isIndianExpressPremiumPage(doc) && (new URL(url)).hostname.endsWith("indianexpress.com")) {
+      const ieContent = doc.querySelector("#pcl-full-content");
+      if (ieContent) {
+        article_content = ieContent.innerHTML;
+      }
+    }
+
     if ((new URL(url)).hostname === "telegra.ph") {
       const ac = doc.querySelector(".tl_article_content");
       if (ac) {
@@ -88,6 +97,13 @@ module.exports = async (request, response) => {
     response.send(render(meta));
   }
 };
+
+/**
+ * Returns true only when Indian Express premium marker is present.
+ */
+function isIndianExpressPremiumPage(doc) {
+  return Boolean(doc.querySelector("div.story-premium.paywall_crown"));
+}
 
 /**
  * transformImageParagraphsAndSanitize(rawHtml, baseUrl)
