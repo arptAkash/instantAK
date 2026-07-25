@@ -20,6 +20,7 @@ module.exports = async (request, response) => {
     return;
   }
   let meta, upstreamResponse;
+  let isIndianExpressPremium = false;
   try {
     if (!isValidUrl(url)) {
       response.status(400).send("Invalid URL");
@@ -42,16 +43,11 @@ module.exports = async (request, response) => {
       fixWeixinArticle(doc);
     }
 
-    let article_content = null;
-
-    // Indian Express premium article handling
-    // Only use #pcl-full-content when the premium div exists.
-    if (isIndianExpressPremiumPage(doc) && (new URL(url)).hostname.endsWith("indianexpress.com")) {
-      const ieContent = doc.querySelector("#pcl-full-content");
-      if (ieContent) {
-        article_content = ieContent.innerHTML;
-      }
+    const hostname = (new URL(url)).hostname;
+    if (hostname.endsWith("indianexpress.com") && isIndianExpressPremiumPage(doc)) {
+      isIndianExpressPremium = true;
     }
+    let article_content = null;
 
     if ((new URL(url)).hostname === "telegra.ph") {
       const ac = doc.querySelector(".tl_article_content");
@@ -61,6 +57,12 @@ module.exports = async (request, response) => {
         ac.querySelector("address").style.display = "none";
 
         article_content = ac.innerHTML;
+      }
+    }
+    if (isIndianExpressPremium) {
+      const ieContent = doc.querySelector("#pcl-full-content");
+      if (ieContent) {
+        article_content = ieContent.innerHTML;
       }
     }
 
@@ -82,7 +84,10 @@ module.exports = async (request, response) => {
     // resolve relative image URLs to absolute, and sanitize the final fragment.
     // ----------------------------
     meta.content = transformImageParagraphsAndSanitize(article_content ?? meta.content, url);
-
+    if (isIndianExpressPremium) {
+      const tmp = new JSDOM(meta.content);
+      meta.textContent = tmp.window.document.body.textContent || "";
+    }
     meta.imageUrl = (ogImage || {}).content;
   } catch (e) {
     console.error(e);
