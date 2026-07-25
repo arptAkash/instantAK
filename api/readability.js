@@ -97,7 +97,10 @@ module.exports = async (request, response) => {
   if (format === "json") {
     response.json(meta);
   } else {
-    response.send(render(meta));
+    const html = render(meta);
+    console.log(html.length);
+    console.log(html.slice(-1000));
+    response.send(html);
   }
 };
 
