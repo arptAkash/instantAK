@@ -33,7 +33,7 @@
 		</form>
 		<p>
 			Telegram:
-			<a href="https://t.me/userInstantBot" target="_blank"> @userInstantBot </a>
+			<a href="https://t.me/syakash" target="_blank"> AKASH </a>
 		</p>
 	</div>
 </main>
