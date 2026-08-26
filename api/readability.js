@@ -108,9 +108,54 @@ function isIndianExpressPremiumPage(doc) {
   return Boolean(doc.querySelector("div.story-premium.paywall_crown"));
 }
 
+function isIndianExpressUrl(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "indianexpress.com" || hostname === "www.indianexpress.com" || hostname.endsWith(".indianexpress.com");
+  } catch (_e) {
+    return false;
+  }
+}
+
+function fixIndianExpressHiddenBody(doc) {
+  const hiddenBody = doc.querySelector("div.paywall.container-wall-exclusive");
+  if (!hiddenBody) return;
+
+  const style = (hiddenBody.getAttribute("style") || "").toLowerCase();
+  if (!style.includes("display") || !style.includes("none")) return;
+
+  // Drop known non-article elements inside this wrapper before revealing it.
+  hiddenBody.querySelectorAll(
+    [
+      ".adboxtop",
+      ".desktop-full-ad",
+      "#taboola-mid-article-personalisation",
+      ".custom_read_button",
+      ".myie-express-article-widget",
+      'img[data-src*="track_1x1"]',
+      'img[data-lazy-src*="track_1x1"]'
+    ].join(",")
+  ).forEach((el) => el.remove());
+
+  // Remove the hiding style and wrapper classes so the article body is
+  // rendered normally in the generated Reader HTML.
+  hiddenBody.style.removeProperty("display");
+  hiddenBody.removeAttribute("style");
+  hiddenBody.classList.remove("paywall", "container-wall-exclusive");
+}
+
 function transformImageParagraphsAndSanitize(rawHtml, baseUrl) {
   const tmpDom = new JSDOM(rawHtml, { url: baseUrl });
   const tmpDoc = tmpDom.window.document;
+
+  // Indian Express: some articles place the real article body inside a
+  // hidden paywall container. Readability extracts that HTML correctly,
+  // but the inline `display:none` survives into the Reader page and hides
+  // everything after the intro. Fix only this known IE pattern so other
+  // publishers are left untouched.
+  if (isIndianExpressUrl(baseUrl)) {
+    fixIndianExpressHiddenBody(tmpDoc);
+  }
 
   function looksLikeFilename(str) {
     if (!str) return true;
